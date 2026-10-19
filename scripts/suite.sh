@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Runs the full comparison: the loaders on one node, under a two slot write
+# queue, and on a three node cluster with 24 shards. Each configuration gets a
+# discarded warm-up and RUNS measured runs. Output goes to results/.
+#
+# The loader runs in a container on the cluster's network, so it reaches every
+# node at the address the node publishes (node discovery works) and no host
+# port forwarder sits in the path.
+#
+# Set OSGO to a checkout of opensearch-go to also run that client: the same
+# bulkindexer arm, and the bulkretry arm, which needs the BulkIndexer from
+# opensearch-go#1219.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+DOCS=${DOCS:-1000000}
+RUNS=${RUNS:-5}
+OUT=results
+mkdir -p "$OUT" bin
+
+case $(docker info --format '{{.Architecture}}') in
+  aarch64 | arm64) goarch=arm64 ;;
+  *) goarch=amd64 ;;
+esac
+build() { CGO_ENABLED=0 GOOS=linux GOARCH=$goarch go build "$@"; }
+
+rm -f bin/bench-pr
+build -o bin/bench ./cmd/bench
+if [ -n "${OSGO:-}" ]; then
+  work=$(mktemp -d)/go.work
+  printf 'go %s\n\nuse (\n\t"%s"\n\t"%s"\n)\n' "$(go env GOVERSION | sed 's/^go//')" "$PWD" "$OSGO" >"$work"
+  GOWORK=$work build -tags bulkretry -o bin/bench-pr ./cmd/bench
+fi
+
+say() { echo "[$(date +%H:%M:%S)] $*"; }
+
+wait_for() { # $1 = expected nodes
+  for _ in $(seq 1 120); do
+    if curl -sf "localhost:9200/_cluster/health?wait_for_nodes=$1&wait_for_status=yellow&timeout=5s" >/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  say "cluster with $1 nodes never became healthy"
+  exit 1
+}
+
+up() { # $1 = compose file, $2 = nodes, $3 = write queue size
+  docker compose -f docker/single-node.yml down -v >/dev/null 2>&1 || true
+  docker compose -f docker/cluster.yml down -v >/dev/null 2>&1 || true
+  WRITE_QUEUE_SIZE=$3 docker compose -f "$1" up -d >/dev/null
+  wait_for "$2"
+  say "up: $1, $2 node(s), write queue $3, $(curl -s 'localhost:9200/_cat/thread_pool/write?h=size,queue_size' | head -1)"
+}
+
+bench() { # $1 = label, $2 = binary, rest = flags
+  local label=$1 bin=$2
+  shift 2
+  [ -x "bin/$bin" ] || return 0 # no OSGO, no second client
+  say "start: $label"
+  docker run --rm --network osbench -v "$PWD/bin:/opt/bench:ro" alpine:3.22 \
+    "/opt/bench/$bin" -docs "$DOCS" -runs "$RUNS" -warmup 1 "$@" | tee "$OUT/$label.log"
+  say "done:  $label"
+}
+
+ONE=(-addr http://os1:9200)
+up docker/single-node.yml 1 10000
+bench single-handrolled     bench    "${ONE[@]}" -arm handrolled
+bench single-bulkindexer    bench    "${ONE[@]}" -arm bulkindexer
+bench single-bulkindexer-pr bench-pr "${ONE[@]}" -arm bulkindexer
+bench single-bulkretry-pr   bench-pr "${ONE[@]}" -arm bulkretry
+
+up docker/single-node.yml 1 2
+bench stress-handrolled-window   bench    "${ONE[@]}" -arm handrolled  -workers 32 -batch 500
+bench stress-handrolled-attempt3 bench    "${ONE[@]}" -arm handrolled  -workers 32 -batch 500 -max-attempts 3
+bench stress-bulkindexer-window  bench    "${ONE[@]}" -arm bulkindexer -workers 32 -flush-bytes 100000
+bench stress-bulkretry-window-pr bench-pr "${ONE[@]}" -arm bulkretry   -workers 32 -flush-bytes 100000
+
+# Every arm discovers the nodes, so the only difference left is the indexer.
+ALL=(-addr http://os1:9200,http://os2:9200,http://os3:9200 -discover -shards 24)
+up docker/cluster.yml 3 10000
+bench cluster24-handrolled          bench    "${ALL[@]}" -arm handrolled
+bench cluster24-bulkindexer         bench    "${ALL[@]}" -arm bulkindexer
+bench cluster24-bulkindexer-pr      bench-pr "${ALL[@]}" -arm bulkindexer
+bench cluster24-bulkretry-grouped   bench-pr "${ALL[@]}" -arm bulkretry -warm-shard-map
+bench cluster24-bulkretry-ungrouped bench-pr "${ALL[@]}" -arm bulkretry -no-shard-router
+
+# An eight slot write queue per node: here the number of write tasks per
+# request, which shard grouping cuts, decides who gets rejected.
+up docker/cluster.yml 3 8
+bench cluster24q8-handrolled          bench    "${ALL[@]}" -arm handrolled
+bench cluster24q8-bulkindexer         bench    "${ALL[@]}" -arm bulkindexer
+bench cluster24q8-bulkretry-grouped   bench-pr "${ALL[@]}" -arm bulkretry -warm-shard-map
+bench cluster24q8-bulkretry-ungrouped bench-pr "${ALL[@]}" -arm bulkretry -no-shard-router
+
+docker compose -f docker/cluster.yml down -v >/dev/null 2>&1 || true
+say "ALL DONE"

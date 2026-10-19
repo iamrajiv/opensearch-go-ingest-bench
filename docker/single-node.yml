@@ -1,0 +1,30 @@
+# One node, the shape used for the OpenSearchCon talk. Shard grouping cannot
+# show up here: with one shard every bulk request already makes one write task.
+# Start:  docker compose -f docker/single-node.yml up -d
+# Stress: WRITE_QUEUE_SIZE=2 docker compose -f docker/single-node.yml up -d
+services:
+  os1:
+    image: opensearchproject/opensearch:3.8.0
+    container_name: osbench-single
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+      # Shrink the write queue to force 429 rejections and watch the retries.
+      - thread_pool.write.queue_size=${WRITE_QUEUE_SIZE:-10000}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    ports:
+      - "9200:9200"
+    volumes:
+      - osbench-single:/usr/share/opensearch/data
+
+networks:
+  default:
+    name: osbench
+
+volumes:
+  osbench-single:

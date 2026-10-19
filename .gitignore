@@ -1,0 +1,4 @@
+.DS_Store
+/bench
+results/*.log
+/bin/

@@ -1,0 +1,72 @@
+# Three nodes, so an index can be sharded across them. Run the loaders with
+# enough shards (-shards 24) for per-request fan-out to matter: without shard
+# grouping one bulk request becomes one write task per shard it touches.
+# Start: docker compose -f docker/cluster.yml up -d
+# Nodes are os1, os2 and os3 on the osbench network; only os1 is published.
+x-node: &node
+  image: opensearchproject/opensearch:3.8.0
+  ulimits:
+    memlock: { soft: -1, hard: -1 }
+    nofile: { soft: 65536, hard: 65536 }
+
+services:
+  os1:
+    <<: *node
+    container_name: osbench-os1
+    environment:
+      - node.name=os1
+      - cluster.name=osbench
+      - discovery.seed_hosts=os1,os2,os3
+      - cluster.initial_cluster_manager_nodes=os1,os2,os3
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+      - thread_pool.write.queue_size=${WRITE_QUEUE_SIZE:-10000}
+    ports:
+      - "9200:9200"
+    volumes:
+      - osbench-os1:/usr/share/opensearch/data
+
+  os2:
+    <<: *node
+    container_name: osbench-os2
+    environment:
+      - node.name=os2
+      - cluster.name=osbench
+      - discovery.seed_hosts=os1,os2,os3
+      - cluster.initial_cluster_manager_nodes=os1,os2,os3
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+      - thread_pool.write.queue_size=${WRITE_QUEUE_SIZE:-10000}
+    volumes:
+      - osbench-os2:/usr/share/opensearch/data
+
+  os3:
+    <<: *node
+    container_name: osbench-os3
+    environment:
+      - node.name=os3
+      - cluster.name=osbench
+      - discovery.seed_hosts=os1,os2,os3
+      - cluster.initial_cluster_manager_nodes=os1,os2,os3
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+      - thread_pool.write.queue_size=${WRITE_QUEUE_SIZE:-10000}
+    volumes:
+      - osbench-os3:/usr/share/opensearch/data
+
+# A fixed name, so the suite can run the loader on the same network and reach
+# every node by the address it publishes.
+networks:
+  default:
+    name: osbench
+
+volumes:
+  osbench-os1:
+  osbench-os2:
+  osbench-os3:
