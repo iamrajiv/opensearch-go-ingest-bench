@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 DOCS=${DOCS:-1000000}
 RUNS=${RUNS:-5}
+PRODUCERS=${PRODUCERS:-16} # goroutines calling Add; the hand-rolled arm ignores it
 OUT=results
 mkdir -p "$OUT" bin
 
@@ -53,13 +54,14 @@ up() { # $1 = compose file, $2 = nodes, $3 = write queue size
   say "up: $1, $2 node(s), write queue $3, $(curl -s 'localhost:9200/_cat/thread_pool/write?h=size,queue_size' | head -1)"
 }
 
-bench() { # $1 = label, $2 = binary, rest = flags
+bench() { # $1 = label, $2 = binary, rest = flags; ENV adds -e flags
   local label=$1 bin=$2
   shift 2
   [ -x "bin/$bin" ] || return 0 # no OSGO, no second client
   say "start: $label"
-  docker run --rm --network osbench -v "$PWD/bin:/opt/bench:ro" alpine:3.22 \
-    "/opt/bench/$bin" -docs "$DOCS" -runs "$RUNS" -warmup 1 "$@" | tee "$OUT/$label.log"
+  # shellcheck disable=SC2086 # ENV holds whole -e flags
+  docker run --rm --network osbench ${ENV:-} -v "$PWD/bin:/opt/bench:ro" alpine:3.22 \
+    "/opt/bench/$bin" -docs "$DOCS" -runs "$RUNS" -warmup 1 -producers "$PRODUCERS" "$@" | tee "$OUT/$label.log"
   say "done:  $label"
 }
 
@@ -84,6 +86,9 @@ bench cluster24-bulkindexer         bench    "${ALL[@]}" -arm bulkindexer
 bench cluster24-bulkindexer-pr      bench-pr "${ALL[@]}" -arm bulkindexer
 bench cluster24-bulkretry-grouped   bench-pr "${ALL[@]}" -arm bulkretry -warm-shard-map
 bench cluster24-bulkretry-ungrouped bench-pr "${ALL[@]}" -arm bulkretry -no-shard-router
+FIXED="-e OPENSEARCH_GO_BULK_SHARD=fixed -e OPENSEARCH_GO_BULK_NODE=fixed"
+ENV=$FIXED bench cluster24-bulkretry-grouped-fixed   bench-pr "${ALL[@]}" -arm bulkretry -warm-shard-map
+ENV=$FIXED bench cluster24-bulkretry-ungrouped-fixed bench-pr "${ALL[@]}" -arm bulkretry -no-shard-router
 
 # An eight slot write queue per node: here the number of write tasks per
 # request, which shard grouping cuts, decides who gets rejected.

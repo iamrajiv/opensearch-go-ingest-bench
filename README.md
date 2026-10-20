@@ -38,10 +38,11 @@ it actually holds.
 |---|---|
 | `handrolled` | generate, batch, fixed worker pool, retry only the rejected documents with backoff and jitter, give up on a time window |
 | `bulkindexer` | the same load through `opensearchutil.BulkIndexer`, which batches and runs the pool for you, with the retry policy still written by the caller |
-| `bulkretry` | one long-lived `BulkIndexer` that retries by itself through `RetryPolicy` and groups documents by shard. Needs [opensearch-go#1219](https://github.com/opensearch-project/opensearch-go/pull/1219); built with `-tags bulkretry` |
+| `bulkretry` | one long-lived `BulkIndexer` that retries by itself through `RetryPolicy` and groups documents by shard. Needs [opensearch-go#1219](https://github.com/opensearch-project/opensearch-go/pull/1219) at `48a11a0` or later; built with `-tags bulkretry` |
 
 All three share the same give-up rule and backoff, so only the client strategy
-differs.
+differs. The `bulkindexer` arm is the same code for both clients: #1219 keeps
+v5.0's `OnFailure` as a deprecated alias of its new `OnError`.
 
 ```
                            handrolled                              bulkindexer, bulkretry
@@ -60,6 +61,11 @@ scripts/suite.sh
 # the same, also running a checkout of opensearch-go, such as the #1219 branch
 OSGO=../opensearch-go scripts/suite.sh
 ```
+
+The indexer arms call `Add` from 16 goroutines by default (`PRODUCERS=1` for
+one), the way a service shares one indexer between its handlers. The suite
+also runs the #1219 indexer with both sizing controllers fixed
+(`OPENSEARCH_GO_BULK_SHARD=fixed`, `OPENSEARCH_GO_BULK_NODE=fixed`).
 
 The suite runs the loader in a container on the cluster's Docker network. That
 way the client can reach every node at the address the node publishes, which
@@ -81,8 +87,9 @@ go run ./cmd/bench -arm handrolled -workers 32 -batch 500 -max-attempts 3 -runs 
 ```
 
 Flags: `-addr -user -pass -index -arm -discover -request-timeout -docs -runs
--warmup -shards -refresh -workers -batch -queue -flush-bytes -flush-interval
--retry-for -max-attempts -no-shard-router -warm-shard-map`.
+-warmup -shards -replicas -refresh -workers -batch -queue -flush-bytes
+-flush-interval -producers -retry-for -max-attempts -no-shard-router
+-warm-shard-map`.
 
 ## Method
 
@@ -90,7 +97,9 @@ Flags: `-addr -user -pass -index -arm -discover -request-timeout -docs -runs
 - every configuration run several times, reported as the **median with the full
   spread**, never a single number;
 - a fresh index per run, created with `number_of_replicas: 0` and
-  `refresh_interval: -1`, restored and refreshed before counting;
+  `refresh_interval: -1`, restored and refreshed before counting. With
+  `-replicas`, the write tasks include the replica copies, since replicas
+  index on the write pool too;
 - the document count comes from the **index**, not from the loader's own
   counters, so a run proves what it stored;
 - write tasks and rejections come from the delta of the write thread pool's
@@ -106,8 +115,16 @@ the lossless column as the result that should never move.
 19 October 2026. A MacBook (Apple silicon) running a Colima VM with 8 CPUs and
 16 GB, OpenSearch 3.8.0 with a 2 GB heap per node, the loader in a container on
 the same VM, Go 1.27.2, opensearch-go v5.0.3 and the #1219 branch at `80d55de`.
-1,000,000 documents per run, median of 5 runs after a discarded warm-up.
-"Rejected" is write tasks the cluster refused; "retried" is documents sent again.
+1,000,000 documents per run, median of 5 runs after a discarded warm-up, one
+goroutine calling `Add`. "Rejected" is write tasks the cluster refused;
+"retried" is documents sent again.
+
+The suite was run again on `2b10d68` and on `89b482b` (16 goroutines calling
+`Add`). The laptop was busier both times, so every row is slower, v5.0.3 with
+the same code included, and the cluster runs on `89b482b` were too noisy to
+quote. The single node and stress rows kept the same shape: the #1219 indexer
+43 to 45% faster than v5.0.3 on one node, and under a two slot queue never
+rejected but about half the speed of v5.0.3 with caller retries.
 
 **One node, one shard.**
 

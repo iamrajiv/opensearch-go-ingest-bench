@@ -47,7 +47,7 @@ func newClient(cfg Config) (*opensearchapi.Client, error) {
 }
 
 // prepareIndex recreates the index tuned for a bulk load: no replicas to copy
-// to, and no refresh while nobody is searching.
+// to unless asked for, and no refresh while nobody is searching.
 func prepareIndex(ctx context.Context, client *opensearchapi.Client, cfg Config) error {
 	// A missing index is fine: this is the first run, or someone cleaned up.
 	_, _ = client.Indices.Delete(ctx, &opensearchapi.IndicesDeleteReq{
@@ -55,8 +55,8 @@ func prepareIndex(ctx context.Context, client *opensearchapi.Client, cfg Config)
 	})
 
 	body := fmt.Sprintf(`{"settings":{"index":{
-		"number_of_shards":%d,"number_of_replicas":0,"refresh_interval":%q}}}`,
-		cfg.Shards, cfg.Refresh)
+		"number_of_shards":%d,"number_of_replicas":%d,"refresh_interval":%q}}}`,
+		cfg.Shards, cfg.Replicas, cfg.Refresh)
 
 	_, err := client.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
 		Index:      cfg.Index,

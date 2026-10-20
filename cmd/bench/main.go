@@ -29,12 +29,14 @@ func main() {
 	flag.IntVar(&cfg.Runs, "runs", 5, "measured runs")
 	flag.IntVar(&cfg.Warmup, "warmup", 1, "runs to discard before measuring")
 	flag.IntVar(&cfg.Shards, "shards", 1, "primary shards")
+	flag.IntVar(&cfg.Replicas, "replicas", 0, "replicas per primary shard (write tasks then include the replica copies)")
 	flag.StringVar(&cfg.Refresh, "refresh", "-1", "index.refresh_interval during the load")
 	flag.IntVar(&cfg.Workers, "workers", 8, "parallel bulk requests in flight")
 	flag.IntVar(&cfg.Batch, "batch", 2000, "documents per bulk request (handrolled)")
 	flag.IntVar(&cfg.Queue, "queue", 4, "batches buffered ahead of the workers (handrolled)")
 	flag.IntVar(&cfg.FlushBytes, "flush-bytes", 5*1024*1024, "flush threshold in bytes (bulkindexer)")
 	flag.DurationVar(&cfg.FlushInterval, "flush-interval", 30*time.Second, "flush threshold as duration (bulkindexer)")
+	flag.IntVar(&cfg.Producers, "producers", 1, "goroutines calling Add at once (bulkindexer, bulkretry)")
 	flag.DurationVar(&cfg.RetryFor, "retry-for", 2*time.Minute, "keep retrying rejected documents this long")
 	flag.IntVar(&cfg.MaxTries, "max-attempts", 0, "give up after this many attempts instead of using -retry-for")
 	flag.BoolVar(&cfg.NoShardRouter, "no-shard-router", false, "turn the indexer's shard grouping off (bulkretry)")
@@ -44,8 +46,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	fmt.Printf("arm=%s docs=%d shards=%d workers=%d runs=%d (+%d warm-up)\n",
-		cfg.Arm, cfg.Docs, cfg.Shards, cfg.Workers, cfg.Runs, cfg.Warmup)
+	fmt.Printf("arm=%s docs=%d shards=%d replicas=%d workers=%d runs=%d (+%d warm-up)\n",
+		cfg.Arm, cfg.Docs, cfg.Shards, cfg.Replicas, cfg.Workers, cfg.Runs, cfg.Warmup)
 
 	results := make([]bench.Result, 0, cfg.Runs)
 	for i := 1; i <= cfg.Warmup+cfg.Runs; i++ {

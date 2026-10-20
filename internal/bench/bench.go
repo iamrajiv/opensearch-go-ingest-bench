@@ -4,10 +4,12 @@ package bench
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"sort"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -25,11 +27,12 @@ type Config struct {
 
 	RequestTimeout time.Duration // per attempt; 0 waits forever
 
-	Docs    int
-	Runs    int
-	Warmup  int
-	Shards  int
-	Refresh string // index.refresh_interval during the load
+	Docs     int
+	Runs     int
+	Warmup   int
+	Shards   int
+	Replicas int    // number_of_replicas; write tasks then include the copies
+	Refresh  string // index.refresh_interval during the load
 
 	// Shared loader knobs.
 	Workers  int
@@ -40,6 +43,7 @@ type Config struct {
 	// BulkIndexer only.
 	FlushBytes    int
 	FlushInterval time.Duration
+	Producers     int // goroutines calling Add at once
 
 	// Hand-rolled only.
 	Queue int
@@ -168,6 +172,25 @@ func keepTrying(cfg Config, attempt int, started time.Time) bool {
 		return attempt < cfg.MaxTries
 	}
 	return time.Since(started) < cfg.RetryFor
+}
+
+// addAll calls add for every event from in, from several goroutines at once,
+// the way a service with many request handlers feeds one shared indexer.
+func addAll(in <-chan Event, producers int, add func(Event) error) error {
+	var wg sync.WaitGroup
+	errs := make([]error, max(producers, 1))
+	for i := range errs {
+		wg.Go(func() {
+			for ev := range in {
+				if err := add(ev); err != nil {
+					errs[i] = err
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 func sleep(ctx context.Context, d time.Duration) {

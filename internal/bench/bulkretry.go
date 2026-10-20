@@ -1,8 +1,9 @@
 //go:build bulkretry
 
 // The bulkretry arm needs the BulkIndexer from opensearch-go#1219 (RetryPolicy,
-// shard grouping), which no release has yet. Build it with -tags bulkretry
-// against a checkout of that branch; see the README.
+// BulkError, shard grouping), which no release has yet. Build it with -tags
+// bulkretry against a checkout of that branch at 48a11a0 or later; see the
+// README.
 
 package bench
 
@@ -35,11 +36,13 @@ func loadBulkRetry(ctx context.Context, client *opensearchapi.Client, cfg Config
 		}
 	}
 
-	// Every id is deterministic, so a transport failure is safe to resend too.
-	policy := opensearchutil.RetryPolicyFunc(func(attempt int, _ opensearchutil.FailureScope,
-		kind opensearchutil.FailureKind, _ opensearchapi.BulkRespItem, _ error,
-	) (time.Duration, bool) {
-		if kind == opensearchutil.FailurePermanent || !keepTrying(cfg, attempt, started) {
+	// Every id is deterministic, so a transport error is safe to resend too.
+	policy := opensearchutil.RetryPolicyFunc(func(attempt int, err *opensearchutil.BulkError) (time.Duration, bool) {
+		switch err.Kind {
+		case opensearchutil.KindPermanent, opensearchutil.KindCanceled:
+			return 0, false
+		}
+		if !keepTrying(cfg, attempt, started) {
 			return 0, false
 		}
 		return backoff(attempt), true
@@ -65,28 +68,22 @@ func loadBulkRetry(ctx context.Context, client *opensearchapi.Client, cfg Config
 		return err
 	}
 
-	addErr := func() error {
-		for ev := range docs {
-			body, err := json.Marshal(ev)
-			if err != nil {
-				return err
-			}
-			err = bi.Add(ctx, opensearchutil.BulkIndexerItem{
-				Action:     "index",
-				DocumentID: ev.ID,
-				Body:       bytes.NewReader(body),
-				// Fires once, when the item is final: the policy gave up or
-				// the failure was permanent.
-				OnFailure: func(context.Context, opensearchutil.BulkIndexerItem, opensearchapi.BulkRespItem, error) {
-					c.dropped.Add(1)
-				},
-			})
-			if err != nil {
-				return err
-			}
+	addErr := addAll(docs, cfg.Producers, func(ev Event) error {
+		body, err := json.Marshal(ev)
+		if err != nil {
+			return err
 		}
-		return nil
-	}()
+		return bi.Add(ctx, opensearchutil.BulkIndexerItem{
+			Action:     "index",
+			DocumentID: ev.ID,
+			Body:       bytes.NewReader(body),
+			// Fires once, when the item is final: the policy gave up or
+			// the error was permanent.
+			OnError: func(context.Context, opensearchutil.BulkIndexerItem, *opensearchutil.BulkError) {
+				c.dropped.Add(1)
+			},
+		})
+	})
 	// Close even when Add failed: with a cancelled context it cancels what is
 	// in flight instead of waiting, and it releases the indexer's goroutines.
 	if err := errors.Join(addErr, bi.Close(ctx)); err != nil {
@@ -113,6 +110,18 @@ func warmShardMap(ctx context.Context, client *opensearchapi.Client, index strin
 		return fmt.Errorf("warm shard map: transport is %T", client.Client.Transport)
 	}
 	if err := tr.ShardMapUnavailable(); err != nil {
+		return fmt.Errorf("warm shard map: %w", err)
+	}
+	// Read the placement once the primaries have started (yellow; green would
+	// also wait for replicas). Read while they are still initializing, it
+	// names no node for them until the next cycle.
+	if _, err := client.Cluster.Health(ctx, &opensearchapi.ClusterHealthReq{
+		Indices: []string{index},
+		Params: &opensearchapi.ClusterHealthParams{
+			WaitForStatus: "yellow",
+			TimeoutParams: opensearchapi.TimeoutParams{Timeout: 30 * time.Second},
+		},
+	}); err != nil {
 		return fmt.Errorf("warm shard map: %w", err)
 	}
 	tr.ShardMap(index) // registers the index

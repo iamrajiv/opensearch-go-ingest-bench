@@ -81,35 +81,29 @@ func indexPass(ctx context.Context, client *opensearchapi.Client, cfg Config, in
 	var mu sync.Mutex
 	var retry []Event
 
-	addErr := func() error {
-		for ev := range in {
-			body, err := json.Marshal(ev)
-			if err != nil {
-				return err
-			}
-			item := opensearchutil.BulkIndexerItem{
-				Action:     "index",
-				DocumentID: ev.ID,
-				Body:       bytes.NewReader(body),
-				// Per-document rejections arrive with a nil error and the status
-				// in resp. A failed request arrives with a non-nil error and an
-				// empty resp, so status 0 here means "unknown", not "fine".
-				OnFailure: func(_ context.Context, _ opensearchutil.BulkIndexerItem, resp opensearchapi.BulkRespItem, err error) {
-					if err != nil || retryable(resp.Status) {
-						mu.Lock()
-						retry = append(retry, ev)
-						mu.Unlock()
-						return
-					}
-					c.dropped.Add(1)
-				},
-			}
-			if err := bi.Add(ctx, item); err != nil {
-				return err
-			}
+	addErr := addAll(in, cfg.Producers, func(ev Event) error {
+		body, err := json.Marshal(ev)
+		if err != nil {
+			return err
 		}
-		return nil
-	}()
+		return bi.Add(ctx, opensearchutil.BulkIndexerItem{
+			Action:     "index",
+			DocumentID: ev.ID,
+			Body:       bytes.NewReader(body),
+			// Per-document rejections arrive with a nil error and the status
+			// in resp. A failed request arrives with a non-nil error and an
+			// empty resp, so status 0 here means "unknown", not "fine".
+			OnFailure: func(_ context.Context, _ opensearchutil.BulkIndexerItem, resp opensearchapi.BulkRespItem, err error) {
+				if err != nil || retryable(resp.Status) {
+					mu.Lock()
+					retry = append(retry, ev)
+					mu.Unlock()
+					return
+				}
+				c.dropped.Add(1)
+			},
+		})
+	})
 	// Close even when Add failed, so the indexer's goroutines are released.
 	if err := errors.Join(addErr, bi.Close(ctx)); err != nil {
 		return nil, err

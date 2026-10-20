@@ -90,7 +90,7 @@ func (f *fakeCluster) storedCount() int {
 
 func testConfig(addr string) Config {
 	return Config{
-		Addr: addr, Index: "bench", Workers: 4, Batch: 10, Queue: 2,
+		Addr: addr, Index: "bench", Workers: 4, Batch: 10, Queue: 2, Producers: 3,
 		FlushBytes: 1024, FlushInterval: 50 * time.Millisecond, RetryFor: 30 * time.Second,
 	}
 }
