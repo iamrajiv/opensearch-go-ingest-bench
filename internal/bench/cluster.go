@@ -86,16 +86,17 @@ func finishIndex(ctx context.Context, client *opensearchapi.Client, cfg Config) 
 	return resp.Count, nil
 }
 
-// writePool is what the cluster's write thread pool had done so far. Tasks are
-// the unit the queue holds, so the task count per request is what shard
-// grouping changes.
-type writePool struct {
+// poolCounts is what one of the cluster's thread pools had done so far, summed
+// over every node. Tasks are the unit the queue holds, so the write task count
+// per request is what shard grouping changes, and the get task count per mget
+// is what splitting it in the client changes.
+type poolCounts struct {
 	completed int64
 	rejected  int64
 }
 
-func writeStats(ctx context.Context, client *opensearchapi.Client) (writePool, error) {
-	var out writePool
+func poolStats(ctx context.Context, client *opensearchapi.Client, name string) (poolCounts, error) {
+	var out poolCounts
 	resp, err := client.Nodes.Stats(ctx, &opensearchapi.NodesStatsReq{
 		Metric: []string{"thread_pool"},
 	})
@@ -103,7 +104,7 @@ func writeStats(ctx context.Context, client *opensearchapi.Client) (writePool, e
 		return out, err
 	}
 	for _, node := range resp.Nodes {
-		pool, ok := node.ThreadPool["write"]
+		pool, ok := node.ThreadPool[name]
 		if !ok {
 			continue
 		}

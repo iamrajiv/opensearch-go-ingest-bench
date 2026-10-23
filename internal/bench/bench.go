@@ -89,7 +89,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return res, fmt.Errorf("prepare index: %w", err)
 	}
 
-	before, err := writeStats(ctx, client)
+	before, err := poolStats(ctx, client, "write")
 	if err != nil {
 		return res, fmt.Errorf("thread pool stats: %w", err)
 	}
@@ -109,7 +109,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	res.Elapsed = time.Since(start)
 	res.DocsPerSec = float64(cfg.Docs) / res.Elapsed.Seconds()
 
-	after, err := writeStats(ctx, client)
+	after, err := poolStats(ctx, client, "write")
 	if err != nil {
 		return res, fmt.Errorf("thread pool stats: %w", err)
 	}
