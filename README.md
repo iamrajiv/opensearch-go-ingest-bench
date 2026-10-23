@@ -38,11 +38,13 @@ it actually holds.
 |---|---|
 | `handrolled` | generate, batch, fixed worker pool, retry only the rejected documents with backoff and jitter, give up on a time window |
 | `bulkindexer` | the same load through `opensearchutil.BulkIndexer`, which batches and runs the pool for you, with the retry policy still written by the caller |
-| `bulkretry` | one long-lived `BulkIndexer` that retries by itself through `RetryPolicy` and groups documents by shard. Needs [opensearch-go#1219](https://github.com/opensearch-project/opensearch-go/pull/1219) at `48a11a0` or later; built with `-tags bulkretry` |
+| `bulkretry` | one long-lived `BulkIndexer` that retries by itself through `RetryPolicy` and groups documents by shard. Needs the indexer [opensearch-go#1219](https://github.com/opensearch-project/opensearch-go/pull/1219) shipped in v5.1.0; built with `-tags bulkretry` |
 
 All three share the same give-up rule and backoff, so only the client strategy
-differs. The `bulkindexer` arm is the same code for both clients: #1219 keeps
-v5.0's `OnFailure` as a deprecated alias of its new `OnError`.
+differs. The `bulkindexer` arm is the same code for both clients: v5.1 keeps
+v5.0's `OnFailure` as a deprecated alias of its new `OnError`. `go.mod` stays
+on v5.0.3, the baseline, so the arms that need v5.1 or later build against a
+checkout through a temporary `go.work` (`OSGO`, below).
 
 ```
                            handrolled                              bulkindexer, bulkretry
@@ -58,13 +60,13 @@ generate -> [chan Event] -> batcher -> [chan []Event] -> workers    generate -> 
 # every configuration below, 5 runs each plus a warm-up, logs in results/
 scripts/suite.sh
 
-# the same, also running a checkout of opensearch-go, such as the #1219 branch
+# the same, also running a checkout of opensearch-go at v5.1 or later
 OSGO=../opensearch-go scripts/suite.sh
 ```
 
 The indexer arms call `Add` from 16 goroutines by default (`PRODUCERS=1` for
 one), the way a service shares one indexer between its handlers. The suite
-also runs the #1219 indexer with both sizing controllers fixed
+also runs the v5.1 indexer with both sizing controllers fixed
 (`OPENSEARCH_GO_BULK_SHARD=fixed`, and `OPENSEARCH_GO_BULK_TARGET=fixed`, which
 was `OPENSEARCH_GO_BULK_NODE` before
 [opensearch-go#1231](https://github.com/opensearch-project/opensearch-go/pull/1231);

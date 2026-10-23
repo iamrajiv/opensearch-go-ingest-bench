@@ -1,9 +1,9 @@
 //go:build bulkretry
 
-// The bulkretry arm needs the BulkIndexer from opensearch-go#1219 (RetryPolicy,
-// BulkError, shard grouping), which no release has yet. Build it with -tags
-// bulkretry against a checkout of that branch at 48a11a0 or later; see the
-// README.
+// The bulkretry arm needs the BulkIndexer that opensearch-go#1219 shipped in
+// v5.1.0 (RetryPolicy, BulkError, shard grouping). go.mod stays on v5.0.3, the
+// baseline, so build it with -tags bulkretry against a v5.1 or later checkout;
+// see the README.
 
 package bench
 
