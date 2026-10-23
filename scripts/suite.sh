@@ -18,41 +18,14 @@ RUNS=${RUNS:-5}
 PRODUCERS=${PRODUCERS:-16} # goroutines calling Add; the hand-rolled arm ignores it
 OUT=results
 mkdir -p "$OUT" bin
-
-case $(docker info --format '{{.Architecture}}') in
-  aarch64 | arm64) goarch=arm64 ;;
-  *) goarch=amd64 ;;
-esac
-build() { CGO_ENABLED=0 GOOS=linux GOARCH=$goarch go build "$@"; }
+# shellcheck source=scripts/lib.sh
+. scripts/lib.sh
 
 rm -f bin/bench-pr
 build -o bin/bench ./cmd/bench
 if [ -n "${OSGO:-}" ]; then
-  work=$(mktemp -d)/go.work
-  printf 'go %s\n\nuse (\n\t"%s"\n\t"%s"\n)\n' "$(go env GOVERSION | sed 's/^go//')" "$PWD" "$OSGO" >"$work"
-  GOWORK=$work build -tags bulkretry -o bin/bench-pr ./cmd/bench
+  GOWORK=$(workspace "$OSGO") build -tags bulkretry -o bin/bench-pr ./cmd/bench
 fi
-
-say() { echo "[$(date +%H:%M:%S)] $*"; }
-
-wait_for() { # $1 = expected nodes
-  for _ in $(seq 1 120); do
-    if curl -sf "localhost:9200/_cluster/health?wait_for_nodes=$1&wait_for_status=yellow&timeout=5s" >/dev/null; then
-      return 0
-    fi
-    sleep 2
-  done
-  say "cluster with $1 nodes never became healthy"
-  exit 1
-}
-
-up() { # $1 = compose file, $2 = nodes, $3 = write queue size
-  docker compose -f docker/single-node.yml down -v >/dev/null 2>&1 || true
-  docker compose -f docker/cluster.yml down -v >/dev/null 2>&1 || true
-  WRITE_QUEUE_SIZE=$3 docker compose -f "$1" up -d >/dev/null
-  wait_for "$2"
-  say "up: $1, $2 node(s), write queue $3, $(curl -s 'localhost:9200/_cat/thread_pool/write?h=size,queue_size' | head -1)"
-}
 
 bench() { # $1 = label, $2 = binary, rest = flags; ENV adds -e flags
   local label=$1 bin=$2
