@@ -22,7 +22,7 @@ type Config struct {
 	Username string
 	Password string
 	Index    string
-	Arm      string // handrolled | bulkindexer | bulkretry (with -tags bulkretry)
+	Arm      string // handrolled | bulkindexer | bulkretry (-tags bulkretry) | mget (-tags mget)
 	Discover bool   // let the client discover nodes; needs reachable publish addresses
 
 	RequestTimeout time.Duration // per attempt; 0 waits forever
@@ -51,6 +51,13 @@ type Config struct {
 	// bulkretry only.
 	NoShardRouter bool // turn the indexer's shard grouping off
 	WarmShardMap  bool // fetch the index's shard map before loading
+
+	// mget only.
+	MGets      int    // mget calls per measured run
+	MGetDocs   int    // documents per mget
+	Readers    int    // goroutines calling MGet at once
+	MGetDriver string // coordinator | direct
+	Alias      bool   // read through an alias, which the client cannot route
 }
 
 // Result is what one run produced. Counts come from the loader; Indexed comes

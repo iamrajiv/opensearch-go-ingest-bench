@@ -18,7 +18,7 @@ import (
 // before the client is built, for an arm that needs more of it.
 func newClient(cfg Config, opts ...func(*opensearchapi.Config)) (*opensearchapi.Client, error) {
 	tp := http.DefaultTransport.(*http.Transport).Clone()
-	tp.MaxIdleConnsPerHost = max(cfg.Workers, 64)
+	tp.MaxIdleConnsPerHost = max(cfg.Workers, cfg.Readers, 64)
 
 	// v5 discovers nodes by default and then talks to the addresses the nodes
 	// publish. Behind Docker or a load balancer those are internal addresses
