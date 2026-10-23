@@ -14,8 +14,9 @@ import (
 // newClient builds a client that keeps enough idle connections for every
 // request a loader has in flight. Go keeps only two per host by default, so
 // most requests would open a fresh connection. The loaders bound concurrency
-// themselves, so the transport does not cap it.
-func newClient(cfg Config) (*opensearchapi.Client, error) {
+// themselves, so the transport does not cap it. opts adjust the configuration
+// before the client is built, for an arm that needs more of it.
+func newClient(cfg Config, opts ...func(*opensearchapi.Config)) (*opensearchapi.Client, error) {
 	tp := http.DefaultTransport.(*http.Transport).Clone()
 	tp.MaxIdleConnsPerHost = max(cfg.Workers, 64)
 
@@ -28,7 +29,7 @@ func newClient(cfg Config) (*opensearchapi.Client, error) {
 		interval = 0 // the client's default cadence
 	}
 
-	return opensearchapi.NewClient(opensearchapi.Config{
+	c := opensearchapi.Config{
 		Client: opensearch.Config{
 			Addresses:             strings.Split(cfg.Addr, ","),
 			Username:              cfg.Username,
@@ -43,7 +44,11 @@ func newClient(cfg Config) (*opensearchapi.Client, error) {
 			// every loader resends, so a stall costs time and not documents.
 			RequestTimeout: cfg.RequestTimeout,
 		},
-	})
+	}
+	for _, opt := range opts {
+		opt(&c)
+	}
+	return opensearchapi.NewClient(c)
 }
 
 // prepareIndex recreates the index tuned for a bulk load: no replicas to copy
