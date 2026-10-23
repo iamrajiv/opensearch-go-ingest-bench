@@ -25,6 +25,9 @@ var (
 	regions  = []string{"eu-west-1", "us-west-2", "ap-south-1"}
 )
 
+// docID is the ID of the i-th generated event, which the read arms ask for.
+func docID(i int) string { return fmt.Sprintf("evt-%09d", i) }
+
 // generate produces n events into out and closes it. The ID is ours, not the
 // cluster's, so re-sending a document replaces it instead of duplicating it.
 func generate(ctx context.Context, n int, out chan<- Event) {
@@ -32,7 +35,7 @@ func generate(ctx context.Context, n int, out chan<- Event) {
 	r := rand.New(rand.NewPCG(1, 2))
 	for i := range n {
 		ev := Event{
-			ID:        fmt.Sprintf("evt-%09d", i),
+			ID:        docID(i),
 			Timestamp: time.Now(),
 			Service:   services[r.IntN(len(services))],
 			Level:     levels[r.IntN(len(levels))],
