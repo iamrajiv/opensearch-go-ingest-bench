@@ -1,6 +1,6 @@
 # opensearch-go-ingest-bench
 
-> A benchmark harness for OpenSearch ingestion in Go: how fast a loader goes, how much work the cluster has to do, and whether anything was lost on the way.
+> A benchmark harness for OpenSearch ingestion in Go: how fast a loader goes, how much work the cluster has to do, and whether anything was lost on the way. It also reads the documents back with `mget`, to compare the client's two mget drivers.
 
 [![CI](https://github.com/iamrajiv/opensearch-go-ingest-bench/actions/workflows/ci.yml/badge.svg)](https://github.com/iamrajiv/opensearch-go-ingest-bench/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/iamrajiv/opensearch-go-ingest-bench)](https://goreportcard.com/report/github.com/iamrajiv/opensearch-go-ingest-bench)
@@ -46,6 +46,41 @@ v5.0's `OnFailure` as a deprecated alias of its new `OnError`. `go.mod` stays
 on v5.0.3, the baseline, so the arms that need v5.1 or later build against a
 checkout through a temporary `go.work` (`OSGO`, below).
 
+## Reads
+
+The `mget` arm loads the index once with the hand-rolled loader, checks it
+holds every document, then measures read phases against it: `-mgets` calls of
+`-mget-docs` random documents each, from `-readers` goroutines at once. It
+compares the two drivers [opensearch-go#1236](https://github.com/opensearch-project/opensearch-go/pull/1236)
+gives `DocumentClient.MGet`, with the same client, the same documents and the
+same reads, so only the driver differs:
+
+| Driver | What it does |
+|---|---|
+| `coordinator` | sends each mget as one request. The node that receives it splits the documents by shard, asks each shard's node for its share, and waits for the slowest before it answers |
+| `direct` | splits each mget by shard in the client, from the shard map the transport keeps, and asks each node only for the documents it holds, at once |
+
+Built with `-tags mget` against a checkout of opensearch-go main at `15c8e47`
+or later, where #1236 merged; no release has it yet. `-mget-driver both`, which
+the suite uses, measures both drivers on one index, alternating between them
+run by run (coordinator then direct, then direct then coordinator), so a laptop
+that gets busier during the runs slows both alike.
+
+| Reported | Why it is there |
+|---|---|
+| docs/s, median and full spread | documents read, not mget calls |
+| p50, p99 | how long one mget call takes, as the caller waits for it |
+| requests per mget | the client's side: what the direct driver fans an mget out to |
+| sent whole | mgets that went to a coordinating node unsplit: all of them for `coordinator`, and for `direct` the ones whose documents it could not route, such as through an alias |
+| nodes per mget, retries, via coordinator | from the client's `MGetObserver`, for the mgets the direct driver splits |
+| **get tasks** per mget | the cluster's side: one get thread pool task per shard an mget touches, on whichever node does the work |
+| get rejections | how hard the reads pushed |
+| **correct runs** | every document found, in the place it was asked for, from the index it is in |
+
+The observer is only told about mgets the direct driver splits. One it hands to
+the cluster whole, because no document routes to a node, is not reported, so the
+harness counts those itself as mgets sent and not reported.
+
 ```
                            handrolled                              bulkindexer, bulkretry
 generate -> [chan Event] -> batcher -> [chan []Event] -> workers    generate -> BulkIndexer
@@ -62,6 +97,11 @@ scripts/suite.sh
 
 # the same, also running a checkout of opensearch-go at v5.1 or later
 OSGO=../opensearch-go scripts/suite.sh
+
+# the mget drivers, against a checkout of opensearch-go main with #1236: one
+# node, three nodes, three nodes through an alias, and three nodes with one held
+# to one CPU
+OSGO=../opensearch-go scripts/mget-suite.sh
 ```
 
 The indexer arms call `Add` from 16 goroutines by default (`PRODUCERS=1` for
@@ -91,10 +131,20 @@ go run ./cmd/bench -arm handrolled -workers 32 -batch 500 -runs 5
 go run ./cmd/bench -arm handrolled -workers 32 -batch 500 -max-attempts 3 -runs 5
 ```
 
+The direct mget driver needs node discovery, so the mget arm runs from inside
+the cluster's network too. `scripts/mget-suite.sh` builds it as `bin/bench-mget`,
+which then runs one configuration by hand:
+
+```shell
+docker run --rm --network osbench -v "$PWD/bin:/opt/bench:ro" alpine:3.22 \
+  /opt/bench/bench-mget -arm mget -addr http://os1:9200 -discover -shards 6 -mget-driver direct
+```
+
 Flags: `-addr -user -pass -index -arm -discover -request-timeout -docs -runs
 -warmup -shards -replicas -refresh -workers -batch -queue -flush-bytes
 -flush-interval -producers -retry-for -max-attempts -no-shard-router
--warm-shard-map`.
+-warm-shard-map`, and for the mget arm `-mgets -mget-docs -readers
+-mget-driver -alias`.
 
 ## Method
 
@@ -110,7 +160,11 @@ Flags: `-addr -user -pass -index -arm -discover -request-timeout -docs -runs
 - write tasks and rejections come from the delta of the write thread pool's
   `completed` and `rejected` counters across every node;
 - every request attempt times out after `-request-timeout`, so a stalled
-  connection becomes a resend and not a hung run.
+  connection becomes a resend and not a hung run;
+- for reads, the index is loaded once per configuration and every read phase
+  asks for the same random documents through either driver. Every answer is
+  checked against the document asked for, and with replicas the reads wait
+  for them to start.
 
 A laptop is not a measuring instrument. Read the ratios between rows, and treat
 the lossless column as the result that should never move.
@@ -190,10 +244,12 @@ that carries over to a real cluster, more than docs/s does.
 ## Layout
 
 ```
-cmd/bench            the runner: flags, repeated runs, the summary table
-internal/bench       loaders, cluster setup, retry policy, statistics
-docker               single node, three node cluster, write queue size
-scripts/suite.sh     every configuration, loader in a container
+cmd/bench              the runner: flags, repeated runs, the summary table
+internal/bench         loaders, the mget arm, cluster setup, retry policy, statistics
+docker                 single node, three node cluster, write queue size
+scripts/suite.sh       every load configuration, loader in a container
+scripts/mget-suite.sh  the mget drivers, side by side
+scripts/lib.sh         what the two suites share
 ```
 
 ## Background
