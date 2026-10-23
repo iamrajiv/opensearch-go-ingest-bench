@@ -59,7 +59,9 @@ bench cluster24-bulkindexer         bench    "${ALL[@]}" -arm bulkindexer
 bench cluster24-bulkindexer-pr      bench-pr "${ALL[@]}" -arm bulkindexer
 bench cluster24-bulkretry-grouped   bench-pr "${ALL[@]}" -arm bulkretry -warm-shard-map
 bench cluster24-bulkretry-ungrouped bench-pr "${ALL[@]}" -arm bulkretry -no-shard-router
-FIXED="-e OPENSEARCH_GO_BULK_SHARD=fixed -e OPENSEARCH_GO_BULK_NODE=fixed"
+# opensearch-go#1231 renamed OPENSEARCH_GO_BULK_NODE to _TARGET; both are set so
+# a checkout from before or after the rename runs the same configuration.
+FIXED="-e OPENSEARCH_GO_BULK_SHARD=fixed -e OPENSEARCH_GO_BULK_NODE=fixed -e OPENSEARCH_GO_BULK_TARGET=fixed"
 ENV=$FIXED bench cluster24-bulkretry-grouped-fixed   bench-pr "${ALL[@]}" -arm bulkretry -warm-shard-map
 ENV=$FIXED bench cluster24-bulkretry-ungrouped-fixed bench-pr "${ALL[@]}" -arm bulkretry -no-shard-router
 

@@ -65,7 +65,10 @@ OSGO=../opensearch-go scripts/suite.sh
 The indexer arms call `Add` from 16 goroutines by default (`PRODUCERS=1` for
 one), the way a service shares one indexer between its handlers. The suite
 also runs the #1219 indexer with both sizing controllers fixed
-(`OPENSEARCH_GO_BULK_SHARD=fixed`, `OPENSEARCH_GO_BULK_NODE=fixed`).
+(`OPENSEARCH_GO_BULK_SHARD=fixed`, and `OPENSEARCH_GO_BULK_TARGET=fixed`, which
+was `OPENSEARCH_GO_BULK_NODE` before
+[opensearch-go#1231](https://github.com/opensearch-project/opensearch-go/pull/1231);
+the suite sets both).
 
 The suite runs the loader in a container on the cluster's Docker network. That
 way the client can reach every node at the address the node publishes, which
