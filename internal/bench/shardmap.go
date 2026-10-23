@@ -1,4 +1,4 @@
-//go:build bulkretry
+//go:build bulkretry || mget
 
 package bench
 
@@ -11,9 +11,10 @@ import (
 	"github.com/opensearch-project/opensearch-go/v5/opensearchtransport"
 )
 
-// warmShardMap gets the index's shard map into the client before the load. A
-// lookup registers the index and the next discovery cycle fetches its map, so
-// without this a fresh index goes ungrouped until that cycle comes round.
+// warmShardMap gets the index's shard map into the client before the load or
+// the reads. A lookup registers the index and the next discovery cycle fetches
+// its map, so without this a fresh index goes ungrouped, and its mgets go
+// through a coordinating node, until that cycle comes round.
 func warmShardMap(ctx context.Context, client *opensearchapi.Client, index string) error {
 	tr, ok := client.Client.Transport.(*opensearchtransport.Transport)
 	if !ok {

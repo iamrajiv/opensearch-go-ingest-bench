@@ -1,7 +1,8 @@
-// Command bench loads documents into OpenSearch with one of two strategies and
-// reports throughput, the work the cluster had to do, and whether anything was
-// lost. Every configuration is run several times and reported as a median with
-// its full spread, because a laptop is not a measuring instrument.
+// Command bench loads documents into OpenSearch with one of several strategies
+// and reports throughput, the work the cluster had to do, and whether anything
+// was lost. The mget arm reads them back instead and checks every answer. Every
+// configuration is run several times and reported as a median with its full
+// spread, because a laptop is not a measuring instrument.
 package main
 
 import (
@@ -22,7 +23,7 @@ func main() {
 	flag.StringVar(&cfg.Username, "user", "", "basic auth username")
 	flag.StringVar(&cfg.Password, "pass", "", "basic auth password")
 	flag.StringVar(&cfg.Index, "index", "bench", "index to recreate and load")
-	flag.StringVar(&cfg.Arm, "arm", "handrolled", "loader: handrolled, bulkindexer, or bulkretry (built with -tags bulkretry)")
+	flag.StringVar(&cfg.Arm, "arm", "handrolled", "loader: handrolled, bulkindexer, bulkretry (built with -tags bulkretry), or the mget read arm (built with -tags mget)")
 	flag.BoolVar(&cfg.Discover, "discover", false, "let the client discover cluster nodes (needs their publish addresses to be reachable)")
 	flag.DurationVar(&cfg.RequestTimeout, "request-timeout", 2*time.Minute, "give up on one request attempt after this long (0 waits forever)")
 	flag.IntVar(&cfg.Docs, "docs", 1_000_000, "documents per run")
@@ -41,10 +42,23 @@ func main() {
 	flag.IntVar(&cfg.MaxTries, "max-attempts", 0, "give up after this many attempts instead of using -retry-for")
 	flag.BoolVar(&cfg.NoShardRouter, "no-shard-router", false, "turn the indexer's shard grouping off (bulkretry)")
 	flag.BoolVar(&cfg.WarmShardMap, "warm-shard-map", false, "fetch the index's shard map before loading; needs -discover (bulkretry)")
+	flag.IntVar(&cfg.MGets, "mgets", 20_000, "mget calls per measured run (mget)")
+	flag.IntVar(&cfg.MGetDocs, "mget-docs", 100, "documents per mget (mget)")
+	flag.IntVar(&cfg.Readers, "readers", 16, "goroutines calling MGet at once (mget)")
+	flag.StringVar(&cfg.MGetDriver, "mget-driver", "coordinator", "coordinator, direct, or both, alternating on one index (mget)")
+	flag.BoolVar(&cfg.Alias, "alias", false, "read through an alias of the index, which the client cannot route (mget)")
 	flag.Parse()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+
+	// A read arm loads the index once and then measures reads against it.
+	if run, ok := bench.ReadArmFor(cfg.Arm); ok {
+		if err := run(ctx, os.Stdout, cfg); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	fmt.Printf("arm=%s docs=%d shards=%d replicas=%d workers=%d runs=%d (+%d warm-up)\n",
 		cfg.Arm, cfg.Docs, cfg.Shards, cfg.Replicas, cfg.Workers, cfg.Runs, cfg.Warmup)
